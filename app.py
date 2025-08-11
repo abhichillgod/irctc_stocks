@@ -11,7 +11,6 @@ from sklearn.preprocessing import StandardScaler
 model = joblib.load("irctc_rf_model.pkl")
 scaler = joblib.load("irctc_scaler.pkl")
 
-# Streamlit App
 def main():
     st.title("📈 Stock Market Prediction App")
     st.write("Predict whether a stock will go **Up** or **Down** using historical data.")
@@ -34,6 +33,10 @@ def main():
             st.error("⚠️ No data found for the selected period.")
             return
 
+        # Ensure Adj Close exists
+        if "Adj Close" not in data.columns:
+            data["Adj Close"] = data["Close"]
+
         # Feature engineering
         df = data.copy()
         df['Return'] = df['Close'].pct_change().fillna(0)
@@ -42,17 +45,27 @@ def main():
         df['MA20'] = df['Close'].rolling(window=20).mean().fillna(method='bfill')
         df['Vol_MA5'] = df['Volume'].rolling(window=5).mean().fillna(method='bfill')
 
+        # Features list
         features = ['Open','High','Low','Close','Adj Close','Volume','Return','MA5','MA10','MA20','Vol_MA5']
-        X = df[features]
 
-        # Scale & Predict
+        # Check if all features are present
+        missing_features = [f for f in features if f not in df.columns]
+        if missing_features:
+            st.error(f"Missing required columns in the dataset: {missing_features}")
+            return
+
+        # Prepare data
+        X = df[features]
         X_scaled = scaler.transform(X)
+
+        # Predictions
         predictions = model.predict(X_scaled)
         df['Prediction'] = predictions
 
         st.subheader("Prediction Summary")
         st.write(df[['Close', 'Prediction']])
 
+        # Show last day's prediction
         last_pred = predictions[-1]
         if last_pred == 1:
             st.success("✅ Model predicts the stock will go **UP** next day.")
