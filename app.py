@@ -44,27 +44,29 @@ def flatten_multiindex_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Create required technical features and ensure Adj Close exists."""
     df = df.copy()
-    # Normalize Adj Close
+
+    # Ensure Adj Close exists
     if "Adj Close" not in df.columns and "Adj_Close" in df.columns:
         df["Adj Close"] = df["Adj_Close"]
     if "Adj Close" not in df.columns and "Close" in df.columns:
         df["Adj Close"] = df["Close"]
 
-    # Create technical features
+    # Create technical features only if base columns exist
     if "Close" in df.columns:
         df['Return'] = df['Close'].pct_change().fillna(0)
         df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean()
         df['MA10'] = df['Close'].rolling(window=10, min_periods=1).mean()
         df['MA20'] = df['Close'].rolling(window=20, min_periods=1).mean()
+
     if "Volume" in df.columns:
         df['Vol_MA5'] = df['Volume'].rolling(window=5, min_periods=1).mean()
-    else:
-        df['Vol_MA5'] = np.nan
 
-    # Fill remaining NaNs conservatively
-    df[['MA5','MA10','MA20','Vol_MA5']] = df[['MA5','MA10','MA20','Vol_MA5']].fillna(method='bfill').fillna(method='ffill')
+    # Fill NaNs only for columns that were actually created
+    cols_to_fill = [c for c in ['MA5','MA10','MA20','Vol_MA5'] if c in df.columns]
+    if cols_to_fill:
+        df[cols_to_fill] = df[cols_to_fill].fillna(method='bfill').fillna(method='ffill')
+
     return df
 
 def main():
