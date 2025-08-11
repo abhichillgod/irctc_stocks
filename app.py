@@ -13,7 +13,7 @@ APP_DIR = os.path.dirname(__file__) if '__file__' in globals() else '.'
 MODEL_PATH = os.path.join(APP_DIR, "irctc_rf_model.pkl")
 SCALER_PATH = os.path.join(APP_DIR, "irctc_scaler.pkl")
 
-# ------------------ Utility Functions ------------------ #
+# ------------------ Load model & scaler ------------------ #
 def load_artifacts(model_path=MODEL_PATH, scaler_path=SCALER_PATH):
     model = None
     scaler = None
@@ -27,14 +27,14 @@ def load_artifacts(model_path=MODEL_PATH, scaler_path=SCALER_PATH):
         st.error(f"Could not load scaler from '{scaler_path}': {e}")
     return model, scaler
 
+# ------------------ Flatten columns ------------------ #
 def flatten_multiindex_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Flatten MultiIndex columns from yfinance into single level."""
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [col[1] if len(col) > 1 and col[1] else col[0] for col in df.columns]
     return df
 
+# ------------------ Feature creation ------------------ #
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Safely create technical features only if base columns exist."""
     df = df.copy()
 
     # Ensure Adj Close exists
@@ -43,27 +43,27 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     if "Adj Close" not in df.columns and "Close" in df.columns:
         df["Adj Close"] = df["Close"]
 
-    # Create features only if Close exists
+    # Technical indicators if Close exists
     if "Close" in df.columns:
         df['Return'] = df['Close'].pct_change().fillna(0)
         df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean()
         df['MA10'] = df['Close'].rolling(window=10, min_periods=1).mean()
         df['MA20'] = df['Close'].rolling(window=20, min_periods=1).mean()
 
-    # Volume-based feature
+    # Volume MA
     if "Volume" in df.columns:
         df['Vol_MA5'] = df['Volume'].rolling(window=5, min_periods=1).mean()
 
-    # Fill NaNs only for columns that exist
+    # Fill NaNs only for existing cols
     cols_to_fill = [c for c in ['MA5', 'MA10', 'MA20', 'Vol_MA5'] if c in df.columns]
     if cols_to_fill:
         df[cols_to_fill] = df[cols_to_fill].fillna(method='bfill').fillna(method='ffill')
 
     return df
 
-# ------------------ Main App ------------------ #
+# ------------------ Main app ------------------ #
 def main():
-    st.title("📈 IRCTC / Stock Direction Prediction (Robust)")
+    st.title("📈 IRCTC / Stock Direction Prediction (Error-Resilient)")
     st.write("Fetch historical data, build features, and predict Up/Down using the pre-trained model.")
 
     model, scaler = load_artifacts()
@@ -80,10 +80,10 @@ def main():
 
     if st.button("Fetch data & run prediction"):
         if model is None or scaler is None:
-            st.error("Model or scaler is missing. Upload 'irctc_rf_model.pkl' and 'irctc_scaler.pkl'.")
+            st.error("Model or scaler is missing. Please upload 'irctc_rf_model.pkl' and 'irctc_scaler.pkl'.")
             return
 
-        # Fetch data safely
+        # Fetch from Yahoo Finance
         try:
             raw = yf.download(stock_symbol, start=start_date, end=end_date, progress=False, threads=False)
         except Exception as e:
@@ -94,35 +94,44 @@ def main():
             st.error("No data returned. Check symbol and date range.")
             return
 
-        # Flatten columns & strip ticker prefixes
+        # Flatten MultiIndex & strip ticker prefixes
         raw = flatten_multiindex_columns(raw)
         raw.columns = [col.split("_")[-1] for col in raw.columns]
 
-        if debug:
-            st.write("Columns after processing:", list(raw.columns))
+        # If only Adj Close exists, fill in other OHLC
+        if "Adj Close" in raw.columns and "Close" not in raw.columns:
+            raw["Close"] = raw["Adj Close"]
+        for col in ['Open', 'High', 'Low']:
+            if col not in raw.columns and "Close" in raw.columns:
+                raw[col] = raw["Close"]
+        if "Volume" not in raw.columns:
+            raw["Volume"] = 0
 
-        # Check base OHLCV columns
+        if debug:
+            st.write("Columns after preprocessing:", list(raw.columns))
+
+        # Final base OHLCV check
         base_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
         missing_base = [c for c in base_cols if c not in raw.columns]
         if missing_base:
-            st.error(f"Missing base OHLCV columns: {missing_base}")
+            st.error(f"Base OHLCV columns still missing: {missing_base}")
             return
 
         # Ensure Adj Close exists
         if "Adj Close" not in raw.columns:
             raw["Adj Close"] = raw["Close"]
 
-        # Create features
+        # Feature creation
         df = prepare_features(raw)
 
-        # Required features list
+        # Required features
         features = ['Open','High','Low','Close','Adj Close','Volume','Return','MA5','MA10','MA20','Vol_MA5']
         missing = [f for f in features if f not in df.columns]
         if missing:
             st.error(f"Missing required columns after preprocessing: {missing}")
             return
 
-        # Prepare dataset
+        # Model input
         X = df[features].copy()
         valid_mask = X.notna().all(axis=1)
         if valid_mask.sum() == 0:
@@ -139,11 +148,11 @@ def main():
         df['Prediction'] = np.nan
         df.loc[valid_mask, 'Prediction'] = preds.astype(int)
 
-        # Show results
+        # Results table
         st.subheader("Prediction Results (last 20 rows)")
         st.write(df[['Close','Prediction']].tail(20))
 
-        # Last prediction
+        # Last prediction message
         if not df['Prediction'].dropna().empty:
             last_pred = int(df['Prediction'].dropna().iloc[-1])
             if last_pred == 1:
@@ -151,7 +160,7 @@ def main():
             else:
                 st.info("🔻 Stock predicted to go DOWN next day.")
 
-        # Download CSV
+        # CSV download
         st.download_button(
             "Download Predictions CSV",
             df.to_csv().encode('utf-8'),
@@ -159,7 +168,7 @@ def main():
             "text/csv"
         )
 
-        # Plot graph
+        # Graph display
         st.subheader(f"📊 {graph_choice}")
         fig, ax = plt.subplots(figsize=(10, 5))
         try:
