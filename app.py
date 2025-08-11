@@ -92,17 +92,24 @@ def main():
 
         try:
             raw = yf.download(stock_symbol, start=start_date, end=end_date, progress=False, threads=False)
-        except Exception as e:
-            st.error(f"Error fetching data for '{stock_symbol}': {e}")
-            return
-
         if raw is None or raw.empty:
             st.error("No data returned. Check the symbol and date range.")
             return
 
+
         raw = flatten_multiindex_columns(raw)
+        raw.columns = [col.split("_")[-1] for col in raw.columns]
+        
         if debug:
             st.write("Raw dataframe columns:", list(raw.columns))
+
+        base_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        missing_base = [c for c in base_cols if c not in raw.columns]
+
+        if missing_base:
+            st.error(f"Missing base OHLCV columns from Yahoo Finance: {missing_base}")
+            st.stop()
+
 
         if "Adj Close" not in raw.columns and "Close" in raw.columns:
             raw["Adj Close"] = raw["Close"]
